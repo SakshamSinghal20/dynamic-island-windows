@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Island/Island.csproj" />
+  <Project Path="tests/Island.Tests/Island.Tests.csproj" />
+</Solution>
