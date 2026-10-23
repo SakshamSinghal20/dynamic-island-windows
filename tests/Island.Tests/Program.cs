@@ -125,6 +125,14 @@ Test("Media disconnect clears stale track duration and progress", () =>
     media.Fixture(true); Check(media.Duration > 0); media.Disconnect();
     Check(media.Duration == 0 && media.Position == 0 && !media.CanSeek && !media.CanShuffle && !media.CanRepeat);
 });
+Test("Media commands without a player surface a recoverable error", () =>
+{
+    using var media = new MediaService(System.Windows.Threading.Dispatcher.CurrentDispatcher);
+    bool rejected = false;
+    try { media.Command("play").GetAwaiter().GetResult(); }
+    catch (InvalidOperationException e) { rejected = e.Message.Contains("player", StringComparison.OrdinalIgnoreCase); }
+    Check(rejected);
+});
 ClipboardChecks.Run(Test);
 ScratchpadChecks.Run(Test);
 string output = args.Length > 0 ? args[0] : "test-results.json";

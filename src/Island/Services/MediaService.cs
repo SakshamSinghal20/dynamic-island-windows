@@ -132,23 +132,41 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
         // A player can replace its SMTC session after an update/restart/wake.
         // Rebind before dispatch, instead of retaining a disconnected wrapper.
         if (manager != null) SelectSession();
-        var current = session; if (current == null) { Status = "Start playback in a connected player first."; Notify(); return; }
+        var current = session;
+        Error = "";
         try
         {
+            if (current == null) throw new InvalidOperationException("Start playback in a connected player first.");
+            var info = current.GetPlaybackInfo(); var controls = info.Controls;
+            bool playing = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+            bool supported = command switch
+            {
+                "play" => controls.IsPlayPauseToggleEnabled || (playing ? controls.IsPauseEnabled : controls.IsPlayEnabled),
+                "next" => controls.IsNextEnabled, "previous" => controls.IsPreviousEnabled,
+                "seek" => controls.IsPlaybackPositionEnabled && Duration > 0 && double.IsFinite(value),
+                "shuffle" => controls.IsShuffleEnabled, "repeat" => controls.IsRepeatEnabled, _ => false
+            };
+            if (!supported) throw new InvalidOperationException("This player does not currently allow that control. Open the player and start a track.");
             bool ok = command switch
             {
+                "play" when playing && controls.IsPauseEnabled => await current.TryPauseAsync(),
+                "play" when !playing && controls.IsPlayEnabled => await current.TryPlayAsync(),
                 "play" => await current.TryTogglePlayPauseAsync(),
                 "next" => await current.TrySkipNextAsync(),
                 "previous" => await current.TrySkipPreviousAsync(),
                 "seek" => await current.TryChangePlaybackPositionAsync(TimeSpan.FromSeconds(Math.Clamp(value, 0, Duration)).Ticks),
-                "shuffle" => await current.TryChangeShuffleActiveAsync(!Shuffled),
-                "repeat" => await current.TryChangeAutoRepeatModeAsync(Repeat == MediaPlaybackAutoRepeatMode.None ? MediaPlaybackAutoRepeatMode.List : Repeat == MediaPlaybackAutoRepeatMode.List ? MediaPlaybackAutoRepeatMode.Track : MediaPlaybackAutoRepeatMode.None),
+                "shuffle" => await current.TryChangeShuffleActiveAsync(!(info.IsShuffleActive ?? false)),
+                "repeat" => await current.TryChangeAutoRepeatModeAsync(info.AutoRepeatMode == MediaPlaybackAutoRepeatMode.None ? MediaPlaybackAutoRepeatMode.List : info.AutoRepeatMode == MediaPlaybackAutoRepeatMode.List ? MediaPlaybackAutoRepeatMode.Track : MediaPlaybackAutoRepeatMode.None),
                 _ => false
             };
-            if (!ok) { Status = "This player does not support that control."; Notify(); }
-            else Refresh();
+            if (!ok) throw new InvalidOperationException("The player rejected that control. Open the player and retry.");
+            Refresh();
         }
-        catch (Exception e) { Status = "Playback command failed: " + e.Message; Notify(); }
+        catch (Exception e)
+        {
+            Error = Status = "Playback command failed: " + e.Message; Notify();
+            throw new InvalidOperationException(Error, e);
+        }
     }
     public void Fixture(bool playing)
     { Title = "A moment of focus"; Artist = "Local motion fixture"; Playing = playing; Duration = 240; position = 67; sampledAt = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency; Notify(); }
