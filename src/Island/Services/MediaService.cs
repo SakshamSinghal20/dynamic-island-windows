@@ -67,6 +67,7 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     private void SelectSession()
     {
         var next = preferred == "auto" ? manager?.GetCurrentSession() : manager?.GetSessions().FirstOrDefault(s => s.SourceAppUserModelId.Equals(preferred, StringComparison.OrdinalIgnoreCase));
+        if (ReferenceEquals(next, session) && next != null) { Refresh(); return; }
         Detach(); session = next; revision++;
         if (next != null)
         {
@@ -128,6 +129,9 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     }
     public async Task Command(string command, double value = 0)
     {
+        // A player can replace its SMTC session after an update/restart/wake.
+        // Rebind before dispatch, instead of retaining a disconnected wrapper.
+        if (manager != null) SelectSession();
         var current = session; if (current == null) { Status = "Start playback in a connected player first."; Notify(); return; }
         try
         {
