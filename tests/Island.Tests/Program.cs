@@ -119,6 +119,12 @@ try
 }
 catch (Exception e) { failures++; results.Add(new { name = "Spotify registered callback", passed = false, error = e.Message }); Console.WriteLine("FAIL Spotify registered callback: " + e.Message); }
 SpotifyChecks.Run(Test);
+Test("Media disconnect clears stale track duration and progress", () =>
+{
+    using var media = new MediaService(System.Windows.Threading.Dispatcher.CurrentDispatcher);
+    media.Fixture(true); Check(media.Duration > 0); media.Disconnect();
+    Check(media.Duration == 0 && media.Position == 0 && !media.CanSeek && !media.CanShuffle && !media.CanRepeat);
+});
 ClipboardChecks.Run(Test);
 ScratchpadChecks.Run(Test);
 string output = args.Length > 0 ? args[0] : "test-results.json";

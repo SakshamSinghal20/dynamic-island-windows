@@ -24,6 +24,7 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     public string Title { get; private set; } = "Not Playing";
     public string Artist { get; private set; } = "Choose a player";
     public string Status { get; private set; } = "Connect Windows media to control a player.";
+    public string Error { get; private set; } = "";
     public string Source => session?.SourceAppUserModelId ?? "";
     public bool Playing { get; private set; }
     public bool Connected => manager != null;
@@ -32,6 +33,9 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     public double Position => Math.Clamp(position + (Playing ? (Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency - sampledAt) * rate : 0), 0, Math.Max(0, Duration));
     public BitmapSource? Artwork { get; private set; }
     public bool CanSeek { get; private set; }
+    public bool CanPlayPause { get; private set; }
+    public bool CanNext { get; private set; }
+    public bool CanPrevious { get; private set; }
     public bool CanShuffle { get; private set; }
     public bool CanRepeat { get; private set; }
     public bool Shuffled { get; private set; }
@@ -69,7 +73,7 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
             next.MediaPropertiesChanged += PropertiesChanged; next.PlaybackInfoChanged += PlaybackChanged; next.TimelinePropertiesChanged += TimelineChanged;
             Refresh();
         }
-        else { Title = "Not Playing"; Artist = "Start playback in your player"; Playing = false; Artwork = null; Duration = position = 0; Status = "Waiting for a Windows media session."; Notify(); }
+        else { ResetPlayback(); Artist = "Start playback in your player"; Status = "Waiting for a Windows media session."; Notify(); }
     }
     private void PropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args) => dispatcher.BeginInvoke(Refresh);
     private void PlaybackChanged(GlobalSystemMediaTransportControlsSession sender, PlaybackInfoChangedEventArgs args) => dispatcher.BeginInvoke(Refresh);
@@ -145,7 +149,14 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     {
         revision++; Detach(); session = null;
         if (manager != null) { manager.CurrentSessionChanged -= CurrentChanged; manager.SessionsChanged -= SessionsChanged; }
-        manager = null; Playing = false; Artwork = null; Title = "Not Playing"; Artist = "Choose a player"; Status = "Media disconnected."; Notify();
+        manager = null; ResetPlayback(); Artist = "Choose a player"; Status = "Media disconnected."; Notify();
+    }
+    private void ResetPlayback()
+    {
+        Playing = false; Artwork = null; Title = "Not Playing"; Error = "";
+        Duration = position = 0; rate = 1;
+        CanPlayPause = CanNext = CanPrevious = CanSeek = CanShuffle = CanRepeat = false;
+        Shuffled = false; Repeat = MediaPlaybackAutoRepeatMode.None;
     }
     public void Dispose() => Disconnect();
 }
