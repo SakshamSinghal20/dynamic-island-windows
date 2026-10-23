@@ -116,7 +116,10 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
             // Timeline position is anchored to LastUpdatedTime, not this async return.
             if (Playing) position += Math.Max(0, (DateTimeOffset.UtcNow - snapshot.timeline.LastUpdatedTime).TotalSeconds) * rate;
             sampledAt = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
-            CanSeek = snapshot.info.Controls.IsPlaybackPositionEnabled; CanShuffle = snapshot.info.Controls.IsShuffleEnabled; CanRepeat = snapshot.info.Controls.IsRepeatEnabled;
+            var controls = snapshot.info.Controls;
+            CanPlayPause = controls.IsPlayPauseToggleEnabled || (Playing ? controls.IsPauseEnabled : controls.IsPlayEnabled);
+            CanNext = controls.IsNextEnabled; CanPrevious = controls.IsPreviousEnabled;
+            CanSeek = controls.IsPlaybackPositionEnabled && Duration > 0; CanShuffle = controls.IsShuffleEnabled; CanRepeat = controls.IsRepeatEnabled;
             Shuffled = snapshot.info.IsShuffleActive ?? false; Repeat = snapshot.info.AutoRepeatMode ?? MediaPlaybackAutoRepeatMode.None;
             Status = "Connected to " + Source; Notify();
         }

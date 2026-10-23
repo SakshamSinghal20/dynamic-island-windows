@@ -49,7 +49,7 @@ public sealed partial class IslandSurface
     private readonly RollingText musicTime = new(11, Theme.Secondary), musicRemaining = new(11, Theme.Secondary);
     private readonly Image artwork = new() { Stretch = Stretch.UniformToFill };
     private readonly Border artworkPlate = new() { Background = Theme.Control, CornerRadius = new(8), ClipToBounds = true };
-    private Button musicPlay = null!, shuffle = null!, repeat = null!;
+    private Button musicPlay = null!, musicPrevious = null!, musicNext = null!, shuffle = null!, repeat = null!;
     private readonly PlaybackSlider progress = new() { Minimum = 0, Maximum = 1, VerticalAlignment = VerticalAlignment.Center };
     private readonly Canvas volumePanel = new() { Width = 264, Height = 44 };
     private SpotifyPanel tracksPanel = null!;
@@ -63,9 +63,9 @@ public sealed partial class IslandSurface
         Canvas page = pages[0]; artworkPlate.Child = artwork; Theme.Place(page, artworkPlate, 0, 4, 48, 48);
         Theme.Place(page, musicTitle, 60, 8, 168, 21); Theme.Place(page, musicArtist, 60, 30, 168, 20);
         Theme.Place(page, progress, 0, 61, 264, 22); Theme.Place(page, musicTime, 0, 81, 80, 17); Theme.Place(page, musicRemaining, 210, 81, 54, 17);
-        Theme.Place(page, Theme.Button("Previous track", () => Run(() => Model.Media.Command("previous")), "previous"), 48, 95, 46, 36);
+        musicPrevious = Theme.Button("Previous track", () => Run(() => Model.Media.Command("previous")), "previous"); Theme.Place(page, musicPrevious, 48, 95, 46, 36);
         musicPlay = Theme.Button("Play or pause", () => Run(() => Model.Media.Command("play")), "play"); Theme.Place(page, musicPlay, 109, 91, 46, 40);
-        Theme.Place(page, Theme.Button("Next track", () => Run(() => Model.Media.Command("next")), "next"), 170, 95, 46, 36);
+        musicNext = Theme.Button("Next track", () => Run(() => Model.Media.Command("next")), "next"); Theme.Place(page, musicNext, 170, 95, 46, 36);
         shuffle = Theme.Button("Shuffle", () => Run(() => Model.Media.Command("shuffle")), "shuffle"); repeat = Theme.Button("Repeat", () => Run(() => Model.Media.Command("repeat")), "repeat");
         var actions = new[] {
             Theme.Button("Favourite Spotify track", () => Run(Spotify.ToggleSaved), "star"), shuffle, repeat,
@@ -91,10 +91,11 @@ public sealed partial class IslandSurface
     { try { Model.SetError(""); await operation(); } catch (Exception e) { Model.SetError(e.Message); } }
     private void RefreshMedia()
     {
-        musicTitle.Text = Model.Media.Title; musicArtist.Text = Model.Error.Length > 0 ? Model.Error : Model.Media.Artist; musicArtist.ToolTip = musicArtist.Text; artwork.Source = Model.Media.Artwork;
+        musicTitle.Text = Model.Media.Title; musicArtist.Text = Model.Error.Length > 0 ? Model.Error : Model.Media.Error.Length > 0 ? Model.Media.Error : Model.Media.Artist; musicArtist.ToolTip = musicArtist.Text; artwork.Source = Model.Media.Artwork;
         artworkPlate.Background = Model.Media.Artwork == null ? Theme.Control : Brushes.Transparent;
         if (wasPlaying != Model.Media.Playing) { wasPlaying = Model.Media.Playing; musicPlay.Content = Theme.Icon(Model.Media.Playing ? "pause" : "play"); }
         progress.IsEnabled = Model.Media.CanSeek || Storage.Diagnostic; shuffle.IsEnabled = Model.Media.CanShuffle; repeat.IsEnabled = Model.Media.CanRepeat;
+        musicPlay.IsEnabled = Model.Media.CanPlayPause || Storage.Diagnostic; musicNext.IsEnabled = Model.Media.CanNext || Storage.Diagnostic; musicPrevious.IsEnabled = Model.Media.CanPrevious || Storage.Diagnostic;
         if (!scrubbing) UpdateProgress();
         musicTime.Set(TimerSession.Label(Model.Media.Position), ReducedMotion); musicRemaining.Set(TimerSession.Label(Math.Max(0, Model.Media.Duration - Model.Media.Position)), ReducedMotion);
         if (!Model.Media.Connected && !Storage.Diagnostic) { if (Model.Error.Length == 0) musicArtist.Text = "Connect from Settings"; if (wasConnected != false) artworkPlate.Child = Theme.Button("Connect Windows media", () => SettingsRequested?.Invoke(), "music"); }
