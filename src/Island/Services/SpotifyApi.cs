@@ -36,9 +36,13 @@ public sealed class SpotifyApi(HttpClient http, Func<Task<string>> access)
         if (response.StatusCode == HttpStatusCode.NotFound) throw new InvalidOperationException("Open Spotify and start a track, then retry. The selected device or item may be unavailable.");
         if (response.StatusCode == HttpStatusCode.Forbidden) throw new InvalidOperationException("Spotify denied this action. Check Premium, app access and granted permissions; some playlists cannot be browsed by development apps.");
         await OAuth.EnsureSuccess(response, timeout.Token);
+        // Player/library mutations have no JSON result. Spotify can acknowledge
+        // them with 200/202 and an opaque command id as well as empty 204.
+        if (request.Method != HttpMethod.Get) return null;
         string text = await response.Content.ReadAsStringAsync(timeout.Token);
         if (string.IsNullOrWhiteSpace(text)) return null;
-        using var json = JsonDocument.Parse(text); return json.RootElement.Clone();
+        try { using var json = JsonDocument.Parse(text); return json.RootElement.Clone(); }
+        catch (JsonException e) { throw new InvalidOperationException("Spotify returned an unreadable response. Try again.", e); }
     }
     public async Task<SpotifyPage> Browse(string mode, string query = "", int offset = 0, string context = "", CancellationToken cancellation = default)
     {

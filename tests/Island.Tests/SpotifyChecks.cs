@@ -10,6 +10,23 @@ internal static class SpotifyChecks
     {
         void Check(bool value) { if (!value) throw new Exception("Spotify contract assertion failed."); }
         JsonElement Json(string value) { using var document = JsonDocument.Parse(value); return document.RootElement.Clone(); }
+        test("Spotify command acknowledgements do not require a JSON response", () =>
+        {
+            using var handler = new FakeHandler(i => new(i == 0 ? HttpStatusCode.OK : HttpStatusCode.Accepted) { Content = new StringContent("command-acknowledgement") });
+            using var http = new HttpClient(handler); var api = new SpotifyApi(http, () => Task.FromResult("fixture"));
+            api.Play(new("spotify:track:abc", "Track", "", "track")).GetAwaiter().GetResult();
+            api.Queue(new("spotify:track:xyz", "Track", "", "track")).GetAwaiter().GetResult();
+            Check(handler.Calls.Count == 2);
+        });
+        test("Spotify still rejects denied commands and reports malformed read responses", () =>
+        {
+            using var handler = new FakeHandler(i => new(i == 0 ? HttpStatusCode.Forbidden : HttpStatusCode.OK) { Content = new StringContent("not-json") });
+            using var http = new HttpClient(handler); var api = new SpotifyApi(http, () => Task.FromResult("fixture"));
+            bool denied = false, unreadable = false;
+            try { api.Play(new("spotify:track:abc", "Track", "", "track")).GetAwaiter().GetResult(); } catch (InvalidOperationException e) { denied = e.Message.Contains("denied"); }
+            try { api.Browse("Queue").GetAwaiter().GetResult(); } catch (InvalidOperationException e) { unreadable = e.Message.Contains("unreadable"); }
+            Check(denied && unreadable);
+        });
         test("Spotify playlist parser handles renamed fields, nulls and local tracks", () =>
         {
             var page = SpotifyApi.ParsePage(Json("""{"items":[{"item":null},{"item":{"uri":"spotify:track:a","name":"A","artists":[{"name":"Artist"}]}},{"track":{"uri":"spotify:track:b","name":"B"}},{"item":{"uri":"spotify:track:c","is_local":true}}],"next":"https://api.spotify.com/v1/playlists/a/items?offset=4"}"""), "Playlist");
