@@ -6,7 +6,7 @@ A native C# desktop app built with .NET 10 and WPF. The original analytical spri
 
 Open `dist/Island/Island.exe`, or double-click `Start Island.cmd`. The portable build includes .NET; you do not need development tools to run it. Requires Windows 10 version 2004 or newer, or Windows 11, on x64.
 
-**Ctrl+Alt+Space** opens or collapses Island. Hover at the center of the top screen edge to open it. Escape dismisses it. The notification-area icon opens Settings, connections, diagnostics, and Quit. Windows may put the icon in the overflow area.
+**Ctrl+Alt+Space** opens or collapses the running Island. A keyboard-opened panel stays open until you press the shortcut again, press Escape, or click outside. Windows startup keeps Island available in the background; after choosing Quit, launch Island again to restore the shortcut. Hover at the center of the top screen edge to open it. The notification-area icon opens Settings, connections, diagnostics, and Quit. Windows may put the icon in the overflow area.
 
 Hover the activity icons to switch between Music, Timer, Clipboard and Scratchpad. Hover the volume or library icon to open that panel, and hover the library tabs to browse. Click and keyboard activation remain available. Playback and library mutations require deliberate activation. Ask AI is available from the tray menu, outside the Music controls.
 
