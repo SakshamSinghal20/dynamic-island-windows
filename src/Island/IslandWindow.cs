@@ -34,7 +34,7 @@ public sealed class IslandWindow : Window
     private Forms.NotifyIcon? tray;
     private HwndSource? source;
     private IntPtr hwnd;
-    private bool expanded, subscribed, dragging, disposed, previousClick, previousEscape, closingSaved, savingBeforeClose;
+    private bool expanded, keyboardPinned, subscribed, dragging, disposed, previousClick, previousEscape, closingSaved, savingBeforeClose;
     private double? lastFrame;
     private TimeSpan lastRenderingTime = TimeSpan.MinValue;
     private double lastDragTime, lastDragPosition;
@@ -95,6 +95,7 @@ public sealed class IslandWindow : Window
         if (!Storage.Diagnostic)
         {
             bool hotkey = Native.RegisterHotKey(hwnd, 1, 0x4000 | 1 | 2, 0x20); // MOD_NOREPEAT | ALT | CONTROL
+            ProcessLifetime.Write("hotkey-registration", "ctrl-alt-space=" + hotkey);
             Native.AddClipboardFormatListener(hwnd); CreateTray();
             if (!hotkey) model.SetError("Ctrl+Alt+Space is in use. Open Island from its tray icon.");
         }
@@ -104,7 +105,7 @@ public sealed class IslandWindow : Window
     }
     private IntPtr Hook(IntPtr handle, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (message == 0x0312) { Expand(!expanded); if (expanded) Activate(); handled = true; }
+        if (message == 0x0312) { keyboardPinned = !expanded; Expand(keyboardPinned); ProcessLifetime.Write("hotkey-toggle", "expanded=" + expanded); if (expanded) Activate(); handled = true; }
         else if (message == 0x031D) Dispatcher.BeginInvoke(() => model.CaptureClipboard());
         else if (message == 0x0021) { handled = true; return (IntPtr)3; } // Hover and buttons do not steal foreground focus.
         else if (message is 0x02E0 or 0x007E) Dispatcher.BeginInvoke(PositionHost);
@@ -160,7 +161,7 @@ public sealed class IslandWindow : Window
     public void Expand(bool value) => SetExpanded(value, suppressHover: true);
     private void SetExpanded(bool value, bool suppressHover)
     {
-        expanded = value; if (!value) { if (suppressHover) hover.Suppress(); Keyboard.ClearFocus(); surface.SetDetail(0); }
+        expanded = value; if (!value) { keyboardPinned = false; if (suppressHover) hover.Suppress(); Keyboard.ClearFocus(); surface.SetDetail(0); }
         Destination();
     }
     private void Wake()
@@ -200,7 +201,7 @@ public sealed class IslandWindow : Window
         bool escape = (Native.GetAsyncKeyState(0x1B) & 0x8000) != 0;
         if (!Storage.Diagnostic && expanded && ((click && !previousClick && !inside) || (escape && !previousEscape))) Expand(false);
         previousClick = click; previousEscape = escape;
-        bool? request = hover.Sample(inside, expanded, dragging || surface.PreventsCollapse, Now);
+        bool? request = hover.Sample(inside, expanded, keyboardPinned || dragging || surface.PreventsCollapse, Now);
         if (request.HasValue) SetExpanded(request.Value, suppressHover: false);
     }
     private void Drag(double delta, bool first)
@@ -287,8 +288,13 @@ public sealed class IslandWindow : Window
                 PointAt(false); await Task.Delay(650); bool leavesWithInputFocus = !expanded;
                 setup?.Close(); PointAt(true); await Task.Delay(300); bool opensWithoutSettings = expanded;
                 PointAt(false); await Task.Delay(650); bool leavesWithoutSettings = !expanded;
-                bool passed = opensWithSettings && leavesWithSettings && reopensWithSettings && inputFocused && leavesWithInputFocus && opensWithoutSettings && leavesWithoutSettings;
-                await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(new { passed, opensWithSettings, leavesWithSettings, reopensWithSettings, inputFocused, leavesWithInputFocus, opensWithoutSettings, leavesWithoutSettings }, new JsonSerializerOptions { WriteIndented = true }));
+                bool handled = false; Hook(hwnd, 0x0312, (IntPtr)1, IntPtr.Zero, ref handled);
+                await Task.Delay(650); bool keyboardStaysOpenOutside = handled && expanded;
+                Hook(hwnd, 0x0312, (IntPtr)1, IntPtr.Zero, ref handled); bool keyboardTogglesClosed = !expanded;
+                Expand(false); PointAt(false); PointAt(true); await Task.Delay(300); bool hoverReopensAfterKeyboard = expanded;
+                PointAt(false); await Task.Delay(650); bool hoverStillClosesAfterKeyboard = !expanded;
+                bool passed = opensWithSettings && leavesWithSettings && reopensWithSettings && inputFocused && leavesWithInputFocus && opensWithoutSettings && leavesWithoutSettings && keyboardStaysOpenOutside && keyboardTogglesClosed && hoverReopensAfterKeyboard && hoverStillClosesAfterKeyboard;
+                await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(new { passed, opensWithSettings, leavesWithSettings, reopensWithSettings, inputFocused, leavesWithInputFocus, opensWithoutSettings, leavesWithoutSettings, keyboardStaysOpenOutside, keyboardTogglesClosed, hoverReopensAfterKeyboard, hoverStillClosesAfterKeyboard }, new JsonSerializerOptions { WriteIndented = true }));
                 Application.Current.Shutdown(passed ? 0 : 2); return;
             }
             if (args.Contains("--render-only"))
