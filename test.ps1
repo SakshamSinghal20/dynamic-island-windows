@@ -16,6 +16,7 @@ if ($interaction.ExitCode -ne 0) { throw "Window hover checks failed. Read $inte
 Get-Content -LiteralPath $interactionReport
 if ($Lifetime) {
     & (Join-Path $PSScriptRoot 'tests\Check-ProcessLifetime.ps1') -Executable (Join-Path $PSScriptRoot 'dist\Island\Island.exe') -Report (Join-Path $artifacts 'lifetime-after.json')
+    & (Join-Path $PSScriptRoot 'tests\Check-ProcessLifetime.ps1') -Executable (Join-Path $PSScriptRoot 'dist\Island\Island.exe') -Report (Join-Path $artifacts 'lifetime-nested-after.json') -Nested
 }
 if ($Motion) {
     $executable = Join-Path $PSScriptRoot 'dist\Island\Island.exe'

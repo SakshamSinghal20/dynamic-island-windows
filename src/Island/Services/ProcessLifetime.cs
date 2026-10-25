@@ -33,46 +33,42 @@ public static class ProcessLifetime
     {
         string? executable = Environment.ProcessPath;
         if (executable == null || Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) || Array.IndexOf(args, "--independent-launch") >= 0 || !InJob) return false;
-        uint? jobFlags = JobFlags;
-        if (jobFlags is uint limits)
+        // QueryInformationJobObject exposes only the immediate job. A parent job
+        // may still kill this process, so relay every job-bound desktop launch.
+        var command = new StringBuilder(Quote(executable));
+        foreach (string argument in args) command.Append(' ').Append(Quote(argument));
+        command.Append(" --independent-launch");
+        object? locator = null, services = null, process = null, startupClass = null, startup = null, method = null, inputTemplate = null, input = null, output = null;
+        try
         {
-            if ((limits & 0x2000) == 0) return false;
-            var command = new StringBuilder(Quote(executable));
-            foreach (string argument in args) command.Append(' ').Append(Quote(argument));
-            command.Append(" --independent-launch");
-            object? locator = null, services = null, process = null, startupClass = null, startup = null, method = null, inputTemplate = null, input = null, output = null;
-            try
-            {
-                locator = Activator.CreateInstance(Type.GetTypeFromProgID("WbemScripting.SWbemLocator")!);
-                services = ((dynamic)locator!).ConnectServer(".", "root\\cimv2");
-                process = ((dynamic)services).Get("Win32_Process");
-                startupClass = ((dynamic)services).Get("Win32_ProcessStartup");
-                startup = ((dynamic)startupClass).SpawnInstance_();
-                ((dynamic)startup).CreateFlags = 0x01000000 | 0x400;
-                ((dynamic)startup).WinstationDesktop = "WinSta0\\Default";
-                var environment = new List<string>();
-                foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) environment.Add(entry.Key + "=" + entry.Value);
-                ((dynamic)startup).EnvironmentVariables = environment.ToArray();
-                ((dynamic)startup).ShowWindow = Array.IndexOf(args, "--lifetime-hold") >= 0 ? 0 : 1;
-                method = ((dynamic)process).Methods_.Item("Create");
-                inputTemplate = ((dynamic)method).InParameters;
-                input = ((dynamic)inputTemplate).SpawnInstance_();
-                ((dynamic)input).CommandLine = command.ToString();
-                ((dynamic)input).CurrentDirectory = AppContext.BaseDirectory;
-                ((dynamic)input).ProcessStartupInformation = startup;
-                output = ((dynamic)services).ExecMethod("Win32_Process", "Create", input);
-                uint result = (uint)((dynamic)output).ReturnValue;
-                if (result != 0) { Write("detach-failed", "Windows process service code=" + result); return false; }
-                Write("detached-launch", "broker=WMI child=" + ((dynamic)output).ProcessId); return true;
-            }
-            catch (Exception e) { Write("detach-failed", e.Message); return false; }
-            finally
-            {
-                foreach (object? value in new[] { output, input, inputTemplate, method, startup, startupClass, process, services, locator })
-                    if (value != null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value);
-            }
+            locator = Activator.CreateInstance(Type.GetTypeFromProgID("WbemScripting.SWbemLocator")!);
+            services = ((dynamic)locator!).ConnectServer(".", "root\\cimv2");
+            process = ((dynamic)services).Get("Win32_Process");
+            startupClass = ((dynamic)services).Get("Win32_ProcessStartup");
+            startup = ((dynamic)startupClass).SpawnInstance_();
+            ((dynamic)startup).CreateFlags = 0x01000000 | 0x400;
+            ((dynamic)startup).WinstationDesktop = "WinSta0\\Default";
+            var environment = new List<string>();
+            foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) environment.Add(entry.Key + "=" + entry.Value);
+            ((dynamic)startup).EnvironmentVariables = environment.ToArray();
+            ((dynamic)startup).ShowWindow = Array.IndexOf(args, "--lifetime-hold") >= 0 ? 0 : 1;
+            method = ((dynamic)process).Methods_.Item("Create");
+            inputTemplate = ((dynamic)method).InParameters;
+            input = ((dynamic)inputTemplate).SpawnInstance_();
+            ((dynamic)input).CommandLine = command.ToString();
+            ((dynamic)input).CurrentDirectory = AppContext.BaseDirectory;
+            ((dynamic)input).ProcessStartupInformation = startup;
+            output = ((dynamic)services).ExecMethod("Win32_Process", "Create", input);
+            uint result = (uint)((dynamic)output).ReturnValue;
+            if (result != 0) { Write("detach-failed", "Windows process service code=" + result); return false; }
+            Write("detached-launch", "broker=WMI child=" + ((dynamic)output).ProcessId); return true;
         }
-        return false;
+        catch (Exception e) { Write("detach-failed", e.Message); return false; }
+        finally
+        {
+            foreach (object? value in new[] { output, input, inputTemplate, method, startup, startupClass, process, services, locator })
+                if (value != null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value);
+        }
     }
     private static string Quote(string value)
     {

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable, [Parameter(Mandatory)][string]$Report)
+param([Parameter(Mandatory)][string]$Executable, [Parameter(Mandatory)][string]$Report, [switch]$Nested)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
@@ -18,9 +18,9 @@ public static class IslandLifetimeTest {
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern bool CreateProcess(string exe,StringBuilder command,IntPtr ps,IntPtr ts,bool inherit,uint flags,IntPtr env,string directory,ref Startup startup,out Child child);
  [DllImport("kernel32.dll",SetLastError=true)] public static extern uint ResumeThread(IntPtr thread);
  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
- public static IntPtr KillGroup() {
+ public static IntPtr LimitGroup(uint flags) {
   IntPtr job=CreateJobObject(IntPtr.Zero,null),buffer=Marshal.AllocHGlobal(144);
-  try {for(int i=0;i<144;i++)Marshal.WriteByte(buffer,i,0);Marshal.WriteInt32(buffer,16,0x2000|0x800);
+  try {for(int i=0;i<144;i++)Marshal.WriteByte(buffer,i,0);Marshal.WriteInt32(buffer,16,(int)flags);
    if(!SetInformationJobObject(job,9,buffer,144))throw new System.ComponentModel.Win32Exception();return job;
   } finally {Marshal.FreeHGlobal(buffer);}
  }
@@ -28,7 +28,8 @@ public static class IslandLifetimeTest {
 '@
 $islandLifetimeReady = Join-Path $env:TEMP ('Island-lifetime-' + [guid]::NewGuid() + '.pid')
 $islandLifetimeStop = $islandLifetimeReady + '.stop'
-$islandLifetimeJob = [IslandLifetimeTest]::KillGroup()
+$islandLifetimeJob = [IslandLifetimeTest]::LimitGroup(0x2000 -bor 0x800)
+$islandLifetimeInnerJob = if ($Nested) { [IslandLifetimeTest]::LimitGroup(0x800) } else { [IntPtr]::Zero }
 $islandLifetimeChild = New-Object IslandLifetimeTest+Child
 $islandLifetimeProbe = $null
 try {
@@ -38,6 +39,7 @@ try {
  $islandLifetimeCommand = [Text.StringBuilder]::new('"' + $Executable + '" --lifetime-hold "' + $islandLifetimeReady + '" "' + $islandLifetimeStop + '"')
  if(-not [IslandLifetimeTest]::CreateProcess($Executable,$islandLifetimeCommand,[IntPtr]::Zero,[IntPtr]::Zero,$false,4,[IntPtr]::Zero,(Split-Path $Executable),[ref]$islandLifetimeStartup,[ref]$islandLifetimeChild)) {throw 'Could not launch suspended lifetime fixture.'}
  if(-not [IslandLifetimeTest]::AssignProcessToJobObject($islandLifetimeJob,$islandLifetimeChild.Process)) {throw 'Could not assign lifetime fixture to the test job.'}
+ if($Nested -and -not [IslandLifetimeTest]::AssignProcessToJobObject($islandLifetimeInnerJob,$islandLifetimeChild.Process)) {throw 'Could not assign lifetime fixture to the nested job.'}
  [IslandLifetimeTest]::ResumeThread($islandLifetimeChild.Thread) | Out-Null
  $islandLifetimeDeadline = (Get-Date).AddSeconds(10)
  while(-not (Test-Path -LiteralPath $islandLifetimeReady) -and (Get-Date) -lt $islandLifetimeDeadline) {Start-Sleep -Milliseconds 100}
@@ -60,6 +62,7 @@ try {
  $islandLifetimeResult | ConvertTo-Json
  if(-not $islandLifetimeResult.passed) {throw 'Process lifetime regression failed.'}
 } finally {
+ if($islandLifetimeInnerJob -ne [IntPtr]::Zero) {[IslandLifetimeTest]::CloseHandle($islandLifetimeInnerJob)|Out-Null}
  if($islandLifetimeJob -ne [IntPtr]::Zero) {[IslandLifetimeTest]::CloseHandle($islandLifetimeJob)|Out-Null}
  if($islandLifetimeChild.Thread -ne [IntPtr]::Zero) {[IslandLifetimeTest]::CloseHandle($islandLifetimeChild.Thread)|Out-Null}
  if($islandLifetimeChild.Process -ne [IntPtr]::Zero) {[IslandLifetimeTest]::CloseHandle($islandLifetimeChild.Process)|Out-Null}
