@@ -50,6 +50,7 @@ public sealed class IslandWindow : Window
         Width = 900; Height = 860; UseLayoutRounding = false; SnapsToDevicePixels = false;
         TextOptions.SetTextRenderingMode(this, TextRenderingMode.Grayscale);
         model = new(settings, Dispatcher); chat = new(settings); spotify = new(settings); surface = new(model, motion, chat, spotify) { ShowIdle = true }; surface.Refresh(); Content = surface;
+        model.Media.ArtworkFallback = (title, artist) => spotify.Connected ? spotify.Api.Artwork(title, artist) : Task.FromResult<byte[]?>(null);
         surface.NeedsMotion += Wake; surface.DestinationChanged += Destination; surface.ExpansionRequested += Expand;
         surface.SettingsRequested += ShowSettings; surface.Dragged += Drag; surface.DragReleased += ReleaseDrag;
         surface.ScratchpadFocusRequested += () => { Native.SetForegroundWindow(hwnd); Native.SetActiveWindow(hwnd); Activate(); surface.FocusScratchpad(); };
