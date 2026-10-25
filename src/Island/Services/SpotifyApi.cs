@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -17,6 +18,45 @@ public sealed record SpotifyPage(SpotifyItem[] Items, bool HasMore, int NextOffs
 public sealed class SpotifyApi(HttpClient http, Func<Task<string>> access)
 {
     private DateTimeOffset retryAt;
+    private string artworkKey = "";
+    private byte[]? artworkBytes;
+    private DateTimeOffset artworkRetryAt;
+    public async Task<byte[]?> Artwork(string title, string artist)
+    {
+        if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist)) return null;
+        string key = title + "\0" + artist;
+        if (key == artworkKey && (artworkBytes != null || DateTimeOffset.UtcNow < artworkRetryAt)) return artworkBytes;
+        artworkKey = key; artworkBytes = null; artworkRetryAt = DateTimeOffset.UtcNow.AddSeconds(15);
+        try
+        {
+            var state = await Request("me/player/currently-playing");
+            if (state == null || !state.Value.TryGetProperty("item", out var item) || item.ValueKind != JsonValueKind.Object ||
+                !item.Text("name").Equals(title, StringComparison.OrdinalIgnoreCase) ||
+                !item.TryGetProperty("artists", out var artists) || artists.ValueKind != JsonValueKind.Array) return null;
+            var names = artists.EnumerateArray().Select(a => a.Text("name")).ToArray();
+            if (!names.Contains(artist, StringComparer.OrdinalIgnoreCase) && !string.Join(", ", names).Equals(artist, StringComparison.OrdinalIgnoreCase)) return null;
+            if (!item.TryGetProperty("album", out var album) || !album.TryGetProperty("images", out var images) || images.ValueKind != JsonValueKind.Array) return null;
+            string url = images.EnumerateArray().Select(i => i.Text("url")).FirstOrDefault(u => Uri.TryCreate(u, UriKind.Absolute, out var uri) && uri.Scheme == "https" && uri.Host == "i.scdn.co") ?? "";
+            if (url.Length == 0) return null;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            // Album artwork is public. Keep the Spotify access token on API requests only.
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentLength > 8_000_000) return null;
+            using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+            using var memory = new MemoryStream(); byte[] buffer = new byte[8192]; int read;
+            while ((read = await stream.ReadAsync(buffer, timeout.Token)) > 0)
+            {
+                if (memory.Length + read > 8_000_000) return null;
+                memory.Write(buffer, 0, read);
+            }
+            byte[] bytes = memory.ToArray();
+            if (artworkKey == key && bytes.Length > 0) artworkBytes = bytes;
+            return bytes.Length > 0 ? bytes : null;
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException or OperationCanceledException) { return null; }
+    }
     public async Task<JsonElement?> Request(string path, HttpMethod? method = null, Dictionary<string, string>? parameters = null, object? body = null, CancellationToken cancellation = default)
     {
         if (DateTimeOffset.UtcNow < retryAt) throw new InvalidOperationException($"Spotify is rate limiting requests. Retry in {Math.Ceiling((retryAt - DateTimeOffset.UtcNow).TotalSeconds)} seconds.");

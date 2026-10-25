@@ -10,6 +10,32 @@ internal static class SpotifyChecks
     {
         void Check(bool value) { if (!value) throw new Exception("Spotify contract assertion failed."); }
         JsonElement Json(string value) { using var document = JsonDocument.Parse(value); return document.RootElement.Clone(); }
+        const string coverState = """{"item":{"name":"Track","artists":[{"name":"Artist"}],"album":{"images":[{"url":"https://i.scdn.co/image/fixture","width":300,"height":300}]}}}""";
+        test("Spotify artwork fallback returns and caches the matching song cover without leaking authorization", () =>
+        {
+            byte[] cover = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z1xkAAAAASUVORK5CYII=");
+            using var handler = new FakeHandler(i => i == 0 ? Reply(coverState) : new(HttpStatusCode.OK) { Content = new ByteArrayContent(cover) });
+            using var http = new HttpClient(handler); var api = new SpotifyApi(http, () => Task.FromResult("fixture"));
+            byte[]? first = api.Artwork("Track", "Artist").GetAwaiter().GetResult();
+            byte[]? again = api.Artwork("Track", "Artist").GetAwaiter().GetResult();
+            Check(first != null && first.SequenceEqual(cover) && again != null && again.SequenceEqual(cover));
+            Check(handler.Calls.Count == 2 && handler.Calls[0].Url.EndsWith("me/player/currently-playing") && handler.Calls[1].Url == "https://i.scdn.co/image/fixture");
+            Check(handler.Authorization[0] == "Bearer fixture" && handler.Authorization[1] == null);
+        });
+        test("Spotify artwork does not show a cover for a different song or artist", () =>
+        {
+            using var handler = new FakeHandler(_ => Reply(coverState)); using var http = new HttpClient(handler); var api = new SpotifyApi(http, () => Task.FromResult("fixture"));
+            Check(api.Artwork("Other track", "Artist").GetAwaiter().GetResult() == null);
+            Check(api.Artwork("Track", "Other artist").GetAwaiter().GetResult() == null);
+            Check(handler.Calls.Count == 2);
+        });
+        test("Spotify artwork failures stay optional and do not repeatedly request the same missing cover", () =>
+        {
+            using var handler = new FakeHandler(_ => new(HttpStatusCode.Forbidden)); using var http = new HttpClient(handler); var api = new SpotifyApi(http, () => Task.FromResult("fixture"));
+            Check(api.Artwork("Track", "Artist").GetAwaiter().GetResult() == null);
+            Check(api.Artwork("Track", "Artist").GetAwaiter().GetResult() == null);
+            Check(handler.Calls.Count == 1);
+        });
         test("Spotify command acknowledgements do not require a JSON response", () =>
         {
             using var handler = new FakeHandler(i => new(i == 0 ? HttpStatusCode.OK : HttpStatusCode.Accepted) { Content = new StringContent("command-acknowledgement") });
@@ -84,8 +110,10 @@ internal static class SpotifyChecks
     private sealed class FakeHandler(Func<int, HttpResponseMessage> reply) : HttpMessageHandler
     {
         public readonly List<(string Method, string Url, string Body)> Calls = [];
+        public readonly List<string?> Authorization = [];
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Authorization.Add(request.Headers.Authorization?.ToString());
             Calls.Add((request.Method.Method, request.RequestUri!.AbsoluteUri, request.Content == null ? "" : await request.Content.ReadAsStringAsync(cancellationToken)));
             return reply(Calls.Count - 1);
         }
