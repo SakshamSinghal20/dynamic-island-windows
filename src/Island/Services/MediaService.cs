@@ -18,7 +18,7 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     public event Action? Changed;
     private GlobalSystemMediaTransportControlsSessionManager? manager;
     private GlobalSystemMediaTransportControlsSession? session;
-    private bool refreshing, refreshAgain;
+    private bool refreshing, refreshAgain, loadingArtwork, nativeArtwork;
     private int revision;
     private string preferred = "";
     public string Title { get; private set; } = "Not Playing";
@@ -32,6 +32,22 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     private double position, sampledAt, rate = 1;
     public double Position => Math.Clamp(position + (Playing ? (Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency - sampledAt) * rate : 0), 0, Math.Max(0, Duration));
     public BitmapSource? Artwork { get; private set; }
+    public Func<string, string, Task<byte[]?>>? ArtworkFallback { private get; set; }
+    public static async Task<(BitmapSource? Image, bool Native)> ReadArtwork(IRandomAccessStreamReference? thumbnail, BitmapSource? cached, bool cachedIsNative)
+    {
+        if (thumbnail == null || (cached != null && cachedIsNative)) return (cached, cachedIsNative);
+        using var stream = await thumbnail.OpenReadAsync();
+        if (stream.Size == 0 || stream.Size > 8_000_000) return (cached, cachedIsNative);
+        using var reader = new DataReader(stream.GetInputStreamAt(0));
+        await reader.LoadAsync((uint)stream.Size); byte[] bytes = new byte[(int)stream.Size]; reader.ReadBytes(bytes);
+        return (DecodeArtwork(bytes), true);
+    }
+    private static BitmapSource DecodeArtwork(byte[] bytes)
+    {
+        using var memory = new MemoryStream(bytes); var bitmap = new BitmapImage();
+        bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.DecodePixelWidth = 128; bitmap.StreamSource = memory; bitmap.EndInit(); bitmap.Freeze();
+        return bitmap;
+    }
     public bool CanSeek { get; private set; }
     public bool CanPlayPause { get; private set; }
     public bool CanNext { get; private set; }
@@ -87,29 +103,22 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
         try
         {
             if (token != revision) return;
-            string knownTitle = Title, knownArtist = Artist; BitmapSource? knownArtwork = Artwork;
+            string knownTitle = Title, knownArtist = Artist; BitmapSource? knownArtwork = Artwork; bool knownNativeArtwork = nativeArtwork;
             var snapshot = await Task.Run(async () =>
             {
                 var props = await current.TryGetMediaPropertiesAsync();
                 var info = current.GetPlaybackInfo(); var timeline = current.GetTimelineProperties();
-                BitmapSource? image = props.Title == knownTitle && props.Artist == knownArtist ? knownArtwork : null;
-                if (props.Thumbnail != null && image == null)
-                {
-                    using var stream = await props.Thumbnail.OpenReadAsync();
-                    if (stream.Size <= 8_000_000)
-                    {
-                        using var reader = new DataReader(stream.GetInputStreamAt(0));
-                        await reader.LoadAsync((uint)stream.Size); byte[] bytes = new byte[(int)stream.Size]; reader.ReadBytes(bytes);
-                        using var memory = new MemoryStream(bytes); var bitmap = new BitmapImage();
-                        bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.DecodePixelWidth = 128; bitmap.StreamSource = memory; bitmap.EndInit(); bitmap.Freeze(); image = bitmap;
-                    }
-                }
-                return (props.Title, props.Artist, info, timeline, image);
+                BitmapSource? cached = props.Title == knownTitle && props.Artist == knownArtist ? knownArtwork : null;
+                var cover = await ReadArtwork(props.Thumbnail, cached, cached != null && knownNativeArtwork);
+                return (props.Title, props.Artist, info, timeline, image: cover.Image, native: cover.Native);
             });
             if (token != revision) return;
             if (Title != snapshot.Title && snapshot.Title.Length > 0)
             { History.Insert(0, (snapshot.Title, snapshot.Artist, Source)); if (History.Count > 30) History.RemoveAt(30); }
+            // A fallback may finish while this metadata snapshot is in flight.
+            if (snapshot.image == null && Title == snapshot.Title && Artist == snapshot.Artist) { snapshot.image = Artwork; snapshot.native = nativeArtwork; }
             Title = snapshot.Title.Length > 0 ? snapshot.Title : "Not Playing"; Artist = snapshot.Artist; Artwork = snapshot.image;
+            nativeArtwork = snapshot.native;
             Playing = snapshot.info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
             rate = snapshot.info.PlaybackRate ?? 1;
             Duration = Math.Max(0, snapshot.timeline.EndTime.TotalSeconds);
@@ -123,9 +132,34 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
             CanSeek = controls.IsPlaybackPositionEnabled && Duration > 0; CanShuffle = controls.IsShuffleEnabled; CanRepeat = controls.IsRepeatEnabled;
             Shuffled = snapshot.info.IsShuffleActive ?? false; Repeat = snapshot.info.AutoRepeatMode ?? MediaPlaybackAutoRepeatMode.None;
             Status = "Connected to " + Source; Notify();
+            RefreshArtwork();
         }
         catch (Exception e) { if (token == revision) { Status = "Player unavailable: " + e.Message; Notify(); } }
         finally { refreshing = false; if (refreshAgain) _ = dispatcher.BeginInvoke(Refresh); }
+    }
+    private async void RefreshArtwork()
+    {
+        var fallback = ArtworkFallback;
+        if (Artwork != null || loadingArtwork || fallback == null || !Source.Contains("Spotify", StringComparison.OrdinalIgnoreCase)) return;
+        int token = revision; string title = Title, artist = Artist;
+        loadingArtwork = true;
+        try
+        {
+            // Cover retrieval must not delay playback state or control updates.
+            var image = await Task.Run(async () =>
+            {
+                var bytes = await fallback(title, artist);
+                if (bytes == null || bytes.Length == 0 || bytes.Length > 8_000_000) return null;
+                return DecodeArtwork(bytes);
+            });
+            if (token == revision && Title == title && Artist == artist && Artwork == null && image != null) { Artwork = image; nativeArtwork = false; Notify(); }
+        }
+        catch (Exception) { /* Artwork is optional; keep playback and its error state independent. */ }
+        finally
+        {
+            loadingArtwork = false;
+            if (session != null && (token != revision || Title != title || Artist != artist)) RefreshArtwork();
+        }
     }
     public async Task Command(string command, double value = 0)
     {
@@ -178,7 +212,7 @@ public sealed class MediaService(Dispatcher dispatcher) : IDisposable
     }
     private void ResetPlayback()
     {
-        Playing = false; Artwork = null; Title = "Not Playing"; Error = "";
+        Playing = false; Artwork = null; nativeArtwork = false; Title = "Not Playing"; Error = "";
         Duration = position = 0; rate = 1;
         CanPlayPause = CanNext = CanPrevious = CanSeek = CanShuffle = CanRepeat = false;
         Shuffled = false; Repeat = MediaPlaybackAutoRepeatMode.None;

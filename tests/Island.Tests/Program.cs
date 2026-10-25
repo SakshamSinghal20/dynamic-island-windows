@@ -119,6 +119,20 @@ try
 }
 catch (Exception e) { failures++; results.Add(new { name = "Spotify registered callback", passed = false, error = e.Message }); Console.WriteLine("FAIL Spotify registered callback: " + e.Message); }
 SpotifyChecks.Run(Test);
+Test("Native artwork replaces a Spotify fallback when Windows publishes it later", () =>
+{
+    var fallback = System.Windows.Media.Imaging.BitmapSource.Create(1, 1, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, new byte[] { 0, 0, 255, 255 }, 4); fallback.Freeze();
+    var native = System.Windows.Media.Imaging.BitmapSource.Create(1, 1, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, new byte[] { 255, 0, 0, 255 }, 4); native.Freeze();
+    var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder(); encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(native));
+    using var memory = new MemoryStream(); encoder.Save(memory);
+    using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+    using (var writer = new Windows.Storage.Streams.DataWriter(stream)) { writer.WriteBytes(memory.ToArray()); writer.StoreAsync().AsTask().GetAwaiter().GetResult(); writer.DetachStream(); }
+    var thumbnail = Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream);
+    var loaded = MediaService.ReadArtwork(thumbnail, fallback, false).GetAwaiter().GetResult();
+    Check(loaded.Native && loaded.Image != null && !ReferenceEquals(loaded.Image, fallback), "Late Windows cover must replace the fallback");
+    byte[] pixel = new byte[4]; new System.Windows.Media.Imaging.FormatConvertedBitmap(loaded.Image!, System.Windows.Media.PixelFormats.Bgra32, null, 0).CopyPixels(new System.Windows.Int32Rect(0, 0, 1, 1), pixel, 4, 0);
+    Check(pixel[0] == 255 && pixel[2] == 0, "Expected the blue native cover, not the red fallback");
+});
 Test("Media disconnect clears stale track duration and progress", () =>
 {
     using var media = new MediaService(System.Windows.Threading.Dispatcher.CurrentDispatcher);
